@@ -1,0 +1,61 @@
+name: Ubuntu Ultimate Pro Build
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🧹 Free Up Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo docker image prune -a -f
+          sudo apt-get clean
+
+      - name: 🛠️ Install Master Tools
+        run: sudo apt-get update && sudo apt-get install -y xorriso squashfs-tools wget curl
+
+      - name: 💿 Secure ISO Download
+        run: |
+          # الحصول على الرابط المباشر لتجنب 404
+          URL=$(curl -sL https://releases.ubuntu.com/24.04/ | grep -Eo 'href="ubuntu-24\.04[^"]*-desktop-amd64\.iso"' | cut -d'"' -f2 | head -n 1)
+          wget -O base.iso "https://releases.ubuntu.com/24.04/$URL"
+
+      - name: 🔓 Extract ISO & Handle Case-Sensitivity
+        run: |
+          mkdir -p x
+          sudo osirrox -indev base.iso -extract / x/
+          sudo chmod -R 777 x/
+          # تحويل كل الأسماء داخل casper لحروف صغيرة لضمان عمل unsquashfs
+          cd x/casper && for f in *; do mv "$f" "${f,,}" 2>/dev/null || true; done
+          cd ../..
+
+      - name: 🏗️ Unpack SquashFS Core
+        run: |
+          # البحث عن الملف سواء كان حروف كبيرة أو صغيرة
+          SQUASH_PATH=$(find x/casper -iname "filesystem.squashfs")
+          sudo unsquashfs -d edit "$SQUASH_PATH"
+
+      - name: ⚡ Run Modification Script
+        run: |
+          chmod +x build.sh
+          sudo ./build.sh
+
+      - name: 🔒 Repack Core (Zstd Compression)
+        run: |
+          # حذف القديم وضغط الجديد بأعلى تقنية
+          SQUASH_PATH=$(find x/casper -iname "filesystem.squashfs")
+          sudo rm "$SQUASH_PATH"
+          sudo mksquashfs edit "$SQUASH_PATH" -comp zstd -b 1M -noappend
+
+      - name: 📦 Create Final ISO
+        run: |
+          sudo xorriso -as mkisofs -r -V "Ubuntu-Ultimate-G62" -o Ubuntu-Final.iso x/
+
+      - name: 📤 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ubuntu-Custom-ISO
+          path: Ubuntu-Final.iso
